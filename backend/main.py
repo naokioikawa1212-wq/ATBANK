@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 import uuid
 from pathlib import Path
 from typing import AsyncGenerator
@@ -14,7 +13,7 @@ from pydantic import BaseModel
 
 from video_processor import create_shorts
 
-app = FastAPI(title="YouTube Shorts Auto Generator")
+app = FastAPI(title="Bike Restore Shorts Generator")
 
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
@@ -31,7 +30,7 @@ VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 AUDIO_EXTS = {".mp3", ".wav", ".aac", ".m4a", ".ogg", ".flac"}
 
 
-def _find_upload(uid: str, exts: set, label: str = "Upload") -> Path:
+def _find_upload(uid: str, exts: set, label: str = "File") -> Path:
     for ext in exts:
         p = UPLOAD_DIR / f"{uid}{ext}"
         if p.exists():
@@ -43,7 +42,7 @@ def _find_upload(uid: str, exts: set, label: str = "Upload") -> Path:
 async def upload_video(file: UploadFile = File(...)):
     ext = Path(file.filename).suffix.lower()
     if ext not in VIDEO_EXTS:
-        raise HTTPException(400, f"Unsupported video: {ext}")
+        raise HTTPException(400, f"非対応フォーマット: {ext}")
     uid = str(uuid.uuid4())
     dest = UPLOAD_DIR / f"{uid}{ext}"
     async with aiofiles.open(dest, "wb") as f:
@@ -56,7 +55,7 @@ async def upload_video(file: UploadFile = File(...)):
 async def upload_bgm(file: UploadFile = File(...)):
     ext = Path(file.filename).suffix.lower()
     if ext not in AUDIO_EXTS:
-        raise HTTPException(400, f"Unsupported audio: {ext}")
+        raise HTTPException(400, f"非対応フォーマット: {ext}")
     uid = str(uuid.uuid4())
     dest = UPLOAD_DIR / f"{uid}{ext}"
     async with aiofiles.open(dest, "wb") as f:
@@ -68,11 +67,10 @@ async def upload_bgm(file: UploadFile = File(...)):
 class ProcessRequest(BaseModel):
     upload_id: str
     num_clips: int = 3
-    clip_duration: int = 60       # seconds, max 60 for Shorts
-    do_telop: bool = True
-    telop_language: str = "ja"
+    clip_duration: int = 60
+    scene_threshold: float = 8.0   # 1-30: lower = more sensitive
     bgm_upload_id: str | None = None
-    bgm_volume: float = 0.2
+    bgm_volume: float = 0.25
 
 
 async def _run(job_id: str, req: ProcessRequest):
@@ -100,8 +98,7 @@ async def _run(job_id: str, req: ProcessRequest):
                 output_dir=output_dir,
                 num_clips=req.num_clips,
                 clip_duration=min(req.clip_duration, 60),
-                do_telop=req.do_telop,
-                telop_language=req.telop_language,
+                scene_threshold=req.scene_threshold,
                 bgm_path=bgm_path,
                 bgm_volume=req.bgm_volume,
                 progress_callback=cb,
@@ -140,8 +137,10 @@ async def _sse(job_id: str) -> AsyncGenerator[str, None]:
 
 @app.get("/api/progress/{job_id}")
 async def progress(job_id: str):
-    return StreamingResponse(_sse(job_id), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    return StreamingResponse(
+        _sse(job_id), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/download/{job_id}/{filename}")
@@ -149,8 +148,7 @@ async def download(job_id: str, filename: str):
     p = JOBS_DIR / job_id / filename
     if not p.exists():
         raise HTTPException(404, "File not found")
-    mt = "video/mp4" if filename.endswith(".mp4") else "text/plain"
-    return FileResponse(str(p), media_type=mt, filename=filename)
+    return FileResponse(str(p), media_type="video/mp4", filename=filename)
 
 
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
