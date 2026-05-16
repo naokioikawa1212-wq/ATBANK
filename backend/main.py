@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 import uuid
 from pathlib import Path
 from typing import AsyncGenerator
@@ -19,10 +20,16 @@ app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
 )
 
-UPLOAD_DIR = Path("uploads")
-JOBS_DIR = Path("jobs")
-UPLOAD_DIR.mkdir(exist_ok=True)
-JOBS_DIR.mkdir(exist_ok=True)
+# When packaged with PyInstaller, store user data in home dir to stay writable
+if getattr(sys, "frozen", False):
+    _DATA_DIR = Path.home() / ".bike-shorts-gen"
+else:
+    _DATA_DIR = Path(__file__).parent
+
+UPLOAD_DIR = _DATA_DIR / "uploads"
+JOBS_DIR = _DATA_DIR / "jobs"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+JOBS_DIR.mkdir(parents=True, exist_ok=True)
 
 jobs: dict[str, dict] = {}
 
@@ -151,6 +158,12 @@ async def download(job_id: str, filename: str):
     return FileResponse(str(p), media_type="video/mp4", filename=filename)
 
 
-frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
+# PyInstaller: bundled assets live in sys._MEIPASS
+if getattr(sys, "frozen", False):
+    _asset_base = Path(sys._MEIPASS)  # type: ignore[attr-defined]
+else:
+    _asset_base = Path(__file__).parent.parent
+
+frontend_dist = _asset_base / "frontend" / "dist"
 if frontend_dist.exists():
     app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="static")

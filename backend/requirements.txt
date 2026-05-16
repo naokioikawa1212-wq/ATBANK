@@ -4,3 +4,4 @@ python-multipart>=0.0.6
 aiofiles>=23.0.0
 faster-whisper>=1.0.0
 pillow>=10.0.0
+pywebview>=5.0
