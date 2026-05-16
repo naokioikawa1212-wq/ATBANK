@@ -6,21 +6,18 @@ from pathlib import Path
 from typing import AsyncGenerator
 
 import aiofiles
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from video_processor import process_video
+from video_processor import create_shorts
 
-app = FastAPI(title="Video Auto-Edit API")
+app = FastAPI(title="YouTube Shorts Auto Generator")
 
 app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
 )
 
 UPLOAD_DIR = Path("uploads")
@@ -34,154 +31,128 @@ VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 AUDIO_EXTS = {".mp3", ".wav", ".aac", ".m4a", ".ogg", ".flac"}
 
 
-def _save_upload_path(upload_id: str, dir: Path, allowed_exts: set) -> Path:
-    for ext in allowed_exts:
-        p = dir / f"{upload_id}{ext}"
+def _find_upload(uid: str, exts: set, label: str = "Upload") -> Path:
+    for ext in exts:
+        p = UPLOAD_DIR / f"{uid}{ext}"
         if p.exists():
             return p
-    raise HTTPException(404, "Upload not found")
+    raise HTTPException(404, f"{label} not found")
 
 
 @app.post("/api/upload/video")
 async def upload_video(file: UploadFile = File(...)):
     ext = Path(file.filename).suffix.lower()
     if ext not in VIDEO_EXTS:
-        raise HTTPException(400, f"Unsupported video format: {ext}")
-    upload_id = str(uuid.uuid4())
-    dest = UPLOAD_DIR / f"{upload_id}{ext}"
+        raise HTTPException(400, f"Unsupported video: {ext}")
+    uid = str(uuid.uuid4())
+    dest = UPLOAD_DIR / f"{uid}{ext}"
     async with aiofiles.open(dest, "wb") as f:
-        while chunk := await file.read(1024 * 1024):
+        while chunk := await file.read(2 * 1024 * 1024):
             await f.write(chunk)
-    return {"upload_id": upload_id, "filename": file.filename, "size": dest.stat().st_size}
+    return {"upload_id": uid, "filename": file.filename, "size": dest.stat().st_size}
 
 
 @app.post("/api/upload/bgm")
 async def upload_bgm(file: UploadFile = File(...)):
     ext = Path(file.filename).suffix.lower()
     if ext not in AUDIO_EXTS:
-        raise HTTPException(400, f"Unsupported audio format: {ext}")
-    upload_id = str(uuid.uuid4())
-    dest = UPLOAD_DIR / f"{upload_id}{ext}"
+        raise HTTPException(400, f"Unsupported audio: {ext}")
+    uid = str(uuid.uuid4())
+    dest = UPLOAD_DIR / f"{uid}{ext}"
     async with aiofiles.open(dest, "wb") as f:
         while chunk := await file.read(1024 * 1024):
             await f.write(chunk)
-    return {"upload_id": upload_id, "filename": file.filename}
+    return {"upload_id": uid, "filename": file.filename}
 
 
 class ProcessRequest(BaseModel):
     upload_id: str
-    # Silence
-    do_silence_cut: bool = True
-    noise_db: float = -35.0
-    min_silence_duration: float = 0.5
-    silence_padding: float = 0.1
-    # BGM
+    num_clips: int = 3
+    clip_duration: int = 60       # seconds, max 60 for Shorts
+    do_telop: bool = True
+    telop_language: str = "ja"
     bgm_upload_id: str | None = None
-    bgm_volume: float = 0.15
-    # Subtitles
-    do_subtitles: bool = False
-    subtitle_language: str = "ja"
-    burn_subs: bool = False
-    # Thumbnail
-    do_thumbnail: bool = False
-    thumbnail_title: str = ""
-    thumbnail_timestamp: float = 5.0
+    bgm_volume: float = 0.2
 
 
-async def _run_processing(job_id: str, req: ProcessRequest):
+async def _run(job_id: str, req: ProcessRequest):
     jobs[job_id]["status"] = "processing"
 
-    def progress(pct: int, msg: str):
+    def cb(pct: int, msg: str):
         jobs[job_id]["progress"] = pct
         jobs[job_id]["message"] = msg
 
     try:
-        input_path = str(_save_upload_path(req.upload_id, UPLOAD_DIR, VIDEO_EXTS))
+        input_path = str(_find_upload(req.upload_id, VIDEO_EXTS, "Video"))
         bgm_path = None
         if req.bgm_upload_id:
             try:
-                bgm_path = str(_save_upload_path(req.bgm_upload_id, UPLOAD_DIR, AUDIO_EXTS))
+                bgm_path = str(_find_upload(req.bgm_upload_id, AUDIO_EXTS, "BGM"))
             except HTTPException:
                 pass
 
         output_dir = str(JOBS_DIR / job_id)
-
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             None,
-            lambda: process_video(
+            lambda: create_shorts(
                 input_path=input_path,
                 output_dir=output_dir,
-                do_silence_cut=req.do_silence_cut,
-                noise_db=req.noise_db,
-                min_silence_duration=req.min_silence_duration,
-                silence_padding=req.silence_padding,
+                num_clips=req.num_clips,
+                clip_duration=min(req.clip_duration, 60),
+                do_telop=req.do_telop,
+                telop_language=req.telop_language,
                 bgm_path=bgm_path,
                 bgm_volume=req.bgm_volume,
-                do_subtitles=req.do_subtitles,
-                subtitle_language=req.subtitle_language,
-                burn_subs=req.burn_subs,
-                do_thumbnail=req.do_thumbnail,
-                thumbnail_title=req.thumbnail_title,
-                thumbnail_timestamp=req.thumbnail_timestamp,
-                progress_callback=progress,
+                progress_callback=cb,
             ),
         )
-        jobs[job_id]["status"] = "done"
-        jobs[job_id]["progress"] = 100
-        jobs[job_id]["result"] = result
+        jobs[job_id].update({"status": "done", "progress": 100, "result": result})
     except Exception as e:
-        jobs[job_id]["status"] = "error"
-        jobs[job_id]["error"] = str(e)
+        jobs[job_id].update({"status": "error", "error": str(e)})
 
 
 @app.post("/api/process")
 async def start_processing(req: ProcessRequest):
-    _save_upload_path(req.upload_id, UPLOAD_DIR, VIDEO_EXTS)
+    _find_upload(req.upload_id, VIDEO_EXTS, "Video")
     job_id = str(uuid.uuid4())
     jobs[job_id] = {"status": "queued", "progress": 0, "message": "待機中", "result": None, "error": None}
-    asyncio.create_task(_run_processing(job_id, req))
+    asyncio.create_task(_run(job_id, req))
     return {"job_id": job_id}
 
 
-async def _progress_stream(job_id: str) -> AsyncGenerator[str, None]:
+async def _sse(job_id: str) -> AsyncGenerator[str, None]:
     if job_id not in jobs:
-        yield f"data: {json.dumps({'error': 'Job not found'})}\n\n"
+        yield f"data: {json.dumps({'error': 'not found'})}\n\n"
         return
     while True:
-        job = jobs[job_id]
-        payload = {"status": job["status"], "progress": job["progress"], "message": job.get("message", "")}
-        if job["status"] == "done":
-            payload["result"] = job["result"]
-        elif job["status"] == "error":
-            payload["error"] = job["error"]
-        yield f"data: {json.dumps(payload)}\n\n"
-        if job["status"] in ("done", "error"):
+        j = jobs[job_id]
+        data: dict = {"status": j["status"], "progress": j["progress"], "message": j.get("message", "")}
+        if j["status"] == "done":
+            data["result"] = j["result"]
+        elif j["status"] == "error":
+            data["error"] = j["error"]
+        yield f"data: {json.dumps(data)}\n\n"
+        if j["status"] in ("done", "error"):
             break
         await asyncio.sleep(0.5)
 
 
 @app.get("/api/progress/{job_id}")
 async def progress(job_id: str):
-    return StreamingResponse(
-        _progress_stream(job_id),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    return StreamingResponse(_sse(job_id), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.get("/api/download/{job_id}/{filename}")
-async def download_file(job_id: str, filename: str):
-    if job_id not in jobs:
-        raise HTTPException(404, "Job not found")
-    file_path = JOBS_DIR / job_id / filename
-    if not file_path.exists():
+async def download(job_id: str, filename: str):
+    p = JOBS_DIR / job_id / filename
+    if not p.exists():
         raise HTTPException(404, "File not found")
-    media = "image/jpeg" if filename.endswith(".jpg") else "text/plain" if filename.endswith(".srt") else "video/mp4"
-    return FileResponse(str(file_path), media_type=media, filename=filename)
+    mt = "video/mp4" if filename.endswith(".mp4") else "text/plain"
+    return FileResponse(str(p), media_type=mt, filename=filename)
 
 
-# Serve React frontend
 frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
 if frontend_dist.exists():
     app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="static")
