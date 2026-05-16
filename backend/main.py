@@ -158,6 +158,23 @@ async def download(job_id: str, filename: str):
     return FileResponse(str(p), media_type="video/mp4", filename=filename)
 
 
+@app.post("/api/open-folder/{job_id}")
+async def open_folder(job_id: str):
+    """Open the output folder in the native file manager (desktop mode)."""
+    import platform, subprocess
+    folder = JOBS_DIR / job_id
+    if not folder.exists():
+        raise HTTPException(404, "Folder not found")
+    system = platform.system()
+    if system == "Windows":
+        subprocess.Popen(["explorer", str(folder)])
+    elif system == "Darwin":
+        subprocess.Popen(["open", str(folder)])
+    else:
+        subprocess.Popen(["xdg-open", str(folder)])
+    return {"path": str(folder)}
+
+
 # PyInstaller: bundled assets live in sys._MEIPASS
 if getattr(sys, "frozen", False):
     _asset_base = Path(sys._MEIPASS)  # type: ignore[attr-defined]

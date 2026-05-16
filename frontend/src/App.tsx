@@ -314,6 +314,13 @@ export default function App() {
               </div>
             )}
 
+            {/* Open folder button */}
+            <button className="open-folder-btn" onClick={() => {
+              fetch(`${API}/api/open-folder/${jobId}`, { method: 'POST' })
+            }}>
+              📂 保存フォルダを開く
+            </button>
+
             {/* Clips grid */}
             <div className="clips-grid">
               {result.clips.map(clip => (
@@ -333,7 +340,7 @@ export default function App() {
                       元動画 <span>{fmtTime(clip.start)}</span> から {clip.duration}秒
                     </div>
                     <a className="dl-btn primary" href={dlUrl(clip.filename)} download={clip.filename}>
-                      ⬇ ショート動画をダウンロード
+                      ⬇ ダウンロード
                     </a>
                   </div>
                 </div>

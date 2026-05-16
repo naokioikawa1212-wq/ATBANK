@@ -262,6 +262,17 @@ body {
 .clip-meta { font-size: 12px; color: #5a5a72; }
 .clip-meta span { color: #f0a040; }
 
+.open-folder-btn {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  width: 100%; padding: 11px;
+  margin-bottom: 14px;
+  border-radius: 9px; border: 1px solid #333348;
+  background: #131322; color: #9090b8;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: all 0.18s;
+}
+.open-folder-btn:hover { border-color: #e67e00; color: #f0a040; background: rgba(230,126,0,0.08); }
+
 .dl-btn {
   display: block; width: 100%; padding: 9px;
   border-radius: 8px; border: 1px solid #222235;
